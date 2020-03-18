@@ -140,7 +140,8 @@ victory = document.getElementById("victory");
 minimap = document.getElementById("minimap");
 ctx = minimap.getContext("2d");
 
-pixelInfo = null;
+var pixelInfo = null;
+var state = null;
 
 loadJSON("/pixels.json", info => {
   pixelInfo = info;
@@ -148,6 +149,7 @@ loadJSON("/pixels.json", info => {
 
 var ws;
 function startWebsocket() {
+  // TODO try raspberrypi.local then fallback to ip address version (or visa versa)
   ws = new WebSocket("ws://raspberrypi.local:7777");
   // var ws = new WebSocket("ws://10.3.141.1:7777");
   ws.onmessage = event => {
@@ -155,8 +157,10 @@ function startWebsocket() {
     switch(message.event) {
     case "explosion":
       playExplosion(message);
+      break;
     default:
-      render(message);
+      state = message;
+      render();
     }
   };
 
@@ -176,7 +180,8 @@ startWebsocket();
 
 
 function playExplosion(event) {
-  audio = document.createElement('audio');
+  console.log(event);
+  let audio = document.createElement('audio');
   audio.src = "explosion.wav";
   audio.clientWidth = 0;
   audio.clientHeight = 0;
@@ -184,11 +189,19 @@ function playExplosion(event) {
     this.remove();
   });
 
-  audio.appendChild(document.body);
-  auido.play();
+  let selfCoordinates = pixelInfo.unique_coords[state.players[state.self].position];
+  let eventCoordinates = pixelInfo.unique_coords[event.position];
+  let d = math.norm(math.subtract(selfCoordinates, eventCoordinates));
+  audio.volume = math.min(1, 1.5 / (d * d));
+
+  document.body.appendChild(audio);
+  audio.play();
 }
 
-function render(state) {
+function render() {
+  if (state == null)
+    return;
+
   let self = state.players[state.self];
   playerMarker.style.backgroundColor = self.color;
   document.querySelector("#bombPower > span").innerHTML = self.bombPower;
