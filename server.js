@@ -4,10 +4,16 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-
+// const play = require('audio-play');
+// const load = require('audio-loader');
  
+// load('/home/pi/Rhomberman/Rhomberman.wav').then(play);
+// spawn('omxplayer', ['/home/pi/Rhomberman/Rhomberman.wav']);
+
 
 // Websocket server
+
+connections = {};
 
 var server = http.createServer(function(request, response) {
   console.log((new Date()) + ' Received request for ' + request.url);
@@ -55,7 +61,6 @@ wsServer.on('connect', connection => {
 
 // Communications with python script
 
-connections = {};
 function broadcast(baseMessage) {
   for (let id in connections) {
     baseMessage.self = id;
@@ -69,6 +74,7 @@ process.stdout.on('data', data => {
       broadcast(JSON.parse(data.toString()));
     } catch(e) {
       console.error(e);
+      console.error(data.toString());
     }
   } else {
     console.log(data.toString());
@@ -77,6 +83,7 @@ process.stdout.on('data', data => {
 process.stderr.on('data', data => {
   console.log(data.toString());
 });
+
 
 
 // Simple HTTP server

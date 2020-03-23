@@ -66,11 +66,6 @@ for (i, local_neighbors) in enumerate(neighbors):
       if norm(unique_coords[n2] - expected_n2_coords) < 0.4:
         next_pixel[str((i,n))] = n2
 
-def latlong(coord):
-  return (acos(coord[2] / norm(coord)), atan2(coord[0], coord[1]))
-
-latlongs = [latlong(coord) for coord in unique_coords]
-
 
 counts = {}
 for n in neighbors:
@@ -82,14 +77,15 @@ for n in neighbors:
 print(len(unique_coords))
 print(counts)
 
+unique_coords = [coord / norm(coord) for coord in unique_coords]
+
 
 f = open("/home/pi/Rhomberman/pixels.json", "w")
 f.write(json.dumps({
   "RAW_SIZE": len(coordinates),
-  "SIZE": len(latlongs),
+  "SIZE": len(unique_to_dupes),
   "unique_to_dupes": unique_to_dupes,
   "unique_coords": [coord.tolist() for coord in unique_coords],
-  # "latlongs": latlongs,
   "neighbors": neighbors,
   "next_pixel": next_pixel,
   } ))

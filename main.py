@@ -12,50 +12,39 @@ import json
 import neopixel
 import numpy as np
 import pathlib
-import socket
+# import socket
 import ssl
 import subprocess
 import urllib.request
 import websockets
 
 from math import exp, floor, pi, sin, sqrt
+from numpy.linalg import norm
 from random import randrange, random
 from threading import Thread
 from time import time, sleep
 
 
-# IP_ADDRESS = '127.0.0.1'
-# s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-# try:
-#     # doesn't even have to be reachable
-#     s.connect(('10.255.255.255', 1))
-#     IP_ADDRESS = s.getsockname()[0]
-# finally:
-#     s.close()
-
-# print(IP_ADDRESS)
-
-# SSID = subprocess.check_output("iwgetid -r", shell = True).decode("utf-8").replace("\n", "")
-
-# url = 'https://rhomberman.firebaseio.com/12345.json'
-# data = str.encode('"%s"' % SSID)
-# # data = str.encode('{"ip": "%s", "SSID": "%s"}' % (IP_ADDRESS, SSID)
-
-# req = urllib.request.Request(url=url, data=data, method='PUT')
-# urllib.request.urlopen(req)
-
-
-# TODO ensure connected to internet before moving on
 
 
 MAX_BOMBS = 5
+MOVE_FREQ = 0.18
+BOMB_MOVE_FREQ = 0.07
 BOMB_FUSE_TIME = 5
 BOMB_EXPLOSION_TIME = 1
-BOMB_MOVE_FREQ = 0.07
-MOVE_FREQ = 0.18
+SHOCKWAVE_TIME = 0.5
 STARTING_BOMB_POWER = 2
 PICKUP_CHANCE = 0.3
 NUM_WALLS = 100
+GAME_TIME = 120
+PREVICTORY_TIME = 2
+VICTORY_TIME = 6
+
+# BLANK_COLOR = np.array((2,2,2))
+BLANK_COLOR = np.array((0,0,0))
+WALL_COLOR = np.array((64,64,64))
+DEATH_COLOR = np.array((10,0,0))
+PICKUP_COLOR = np.array((255,100,200))
 
 
 f = open("/home/pi/Rhomberman/pixels.json", "r")
@@ -68,12 +57,17 @@ next_pixel = pixel_info["next_pixel"]
 unique_coords = [np.array(coord) for coord in pixel_info["unique_coords"]]
 unique_to_dupes = pixel_info["unique_to_dupes"]
 
-pixels = neopixel.NeoPixel(board.D18, RAW_SIZE, auto_write=False)
+pixels = neopixel.NeoPixel(board.D19, RAW_SIZE, auto_write=False)
+# pixels = neopixel.NeoPixel(board.D18, RAW_SIZE, auto_write=False)
 print("Running %s pixels" % pixel_info["RAW_SIZE"])
 
 START_POSITIONS = [54, 105, 198, 24, 125, 179, 168, 252]
 players = []
 statuses = ["blank"] * SIZE
+pixel_colors = [np.array((0,0,0))] * SIZE
+explosions = collections.deque(maxlen=16)
+for i in range(16):
+  explosions.append((0,0))
 
 game_state = "start"
 state_end_time = 0
@@ -82,6 +76,7 @@ victory_color_string = None
 
 
 def start():
+
   players.append(Player(
     position=54,
     color=(120, 2, 200),
@@ -164,7 +159,7 @@ def update():
 
   elif game_state == "play":
     # Timer death creep from sphere south
-    threshold = 5 + (time() - state_end_time)/4
+    threshold = 1 + (time() - state_end_time)/20
     for i in range(SIZE):
       if unique_coords[i][2] < threshold:
         statuses[i] = "death"
@@ -185,7 +180,7 @@ def update():
     # GAME OVER
     if live_player_count <= 1:
       game_state = "previctory"
-      state_end_time = time() + 2
+      state_end_time = time() + PREVICTORY_TIME
       victory_color = last_player_alive.color
       victory_color_string = last_player_alive.color_string
       broadcast_state()
@@ -199,10 +194,10 @@ def update():
       state_end_time = 0
     elif game_state == "start":
       game_state = "play"
-      state_end_time = time() + 120
+      state_end_time = time() + GAME_TIME
     elif game_state == "previctory":
       game_state = "victory"
-      state_end_time = time() + 6
+      state_end_time = time() + VICTORY_TIME
 
       clear_walls()
       for player in players:
@@ -222,12 +217,11 @@ def update():
   elif game_state == "victory":
     render_victory()
   else:
-    render_game()
-  pixels.show()
+    render_game(playing_players())
 
+# ================================ Rendering =========================================
 
 def render_start():
-
   if len(claimed_players()) == 0 or state_end_time > 0:
     end_time_factor = 1
     if state_end_time > 0:
@@ -242,30 +236,24 @@ def render_start():
       magnitude *= 50 * end_time_factor
       magnitude = int(magnitude)
       pixels[i] = (magnitude, magnitude, magnitude)
+  
+    pixels.show()
+    return
 
-  else:
-    pixels.fill((0,0,0))
-
-  for i in range(SIZE):
-    if isinstance(statuses[i], float):
-      if statuses[i] < time():
-        statuses[i] = "blank"
-      else:
-        render_explosion(i)
-
-  for player in claimed_players():
-    player.render_ready()
+  render_game(claimed_players())
 
 
 def render_victory():
   for (i, coord) in enumerate(unique_coords):
-    color_pixel(i, victory_color * sin(coord[2] - 4*time()))
+    pixel_colors[i] = victory_color * sin(4*coord[2] - 4*time())
+
+  finalize_pixels()
 
 
-def render_game():
-  pixels.fill((0,0,0))
+def render_game(players_to_render):
+  color_all(BLANK_COLOR)
 
-  for player in playing_players():
+  for player in players_to_render:
     player.render_ghost_trail()
 
   for i in range(SIZE):
@@ -273,26 +261,54 @@ def render_game():
       # already handled
       pass
     elif statuses[i] == "death":
-      color_pixel(i, (10, 0, 0))
+      pixel_colors[i] = DEATH_COLOR
     elif statuses[i] == "wall":
-      color_pixel(i, (10, 10, 10))
+      pixel_colors[i] = WALL_COLOR
     elif statuses[i] == "power_pickup":
       magnitude = 0.3 + 0.2 * sin(4*time() + i)
       magnitude = magnitude * magnitude
-      color_pixel(i, np.array((255,100,200)) * magnitude)
+      pixel_colors[i] = PICKUP_COLOR * magnitude
     elif statuses[i] < time():
       statuses[i] = "blank"
-      color_pixel(i, (0, 0, 0))
+      pixel_colors[i] = BLANK_COLOR
     else:
-      render_explosion(i)
+      x = 1 + (time() - statuses[i]) / BOMB_EXPLOSION_TIME
+      x *= len(EXPLOSION_COLOR_SEQUENCE) - 1
+      pixel_colors[i] = multi_lerp(x, EXPLOSION_COLOR_SEQUENCE)
 
-  for player in playing_players():
+
+  for (timestamp, position) in explosions:
+    if time() - timestamp > SHOCKWAVE_TIME * 2:
+      continue
+
+    explode_coord = unique_coords[position]
+    for (i, coord) in enumerate(unique_coords):
+      d = (1 + np.dot(explode_coord, coord))/2
+      d = 1 - d*d
+      phase = (time() - timestamp) / SHOCKWAVE_TIME - d
+      if phase > 0 and phase < 0.2:
+        pixel_colors[i] = pixel_colors[i] * (0.4 + 0.5*d)
+
+
+  for player in players_to_render:
     player.render_player()
 
-def render_explosion(index):
-  x = 1 + (time() - statuses[index]) / BOMB_EXPLOSION_TIME
-  x *= len(EXPLOSION_COLOR_SEQUENCE) - 1
-  color_pixel(index, multi_lerp(x, EXPLOSION_COLOR_SEQUENCE))
+  finalize_pixels()
+
+
+def color_all(color):
+  for i in range(len(pixel_colors)):
+    pixel_colors[i] = color
+
+
+def finalize_pixels():
+  for (index, color) in enumerate(pixel_colors):
+    for dupe in unique_to_dupes[index]:
+      pixels[dupe] = (
+        max(0, min(255, int(color[0]))),
+        max(0, min(255, int(color[1]))),
+        max(0, min(255, int(color[2]))))
+  pixels.show()
 
 
 # ================================ MISC =========================================
@@ -302,12 +318,6 @@ def claimed_players():
 def playing_players():
   return [player for player in players if player.is_playing]
 
-def color_pixel(index, color):
-  for dupe in unique_to_dupes[index]:
-    pixels[dupe] = (
-      max(0, min(255, int(color[0]))),
-      max(0, min(255, int(color[1]))),
-      max(0, min(255, int(color[2]))))
 
 def multi_lerp(x, control_points):
   if x < 0:
@@ -348,7 +358,7 @@ def ortho_proj(u, v):
   return u - projection(u,v)
 
 # ================================ PLAYER =========================================
-GHOST_BUFFER_LEN = 20
+GHOST_BUFFER_LEN = 8
 
 class Player:
 
@@ -412,10 +422,9 @@ class Player:
       return
 
     up = unique_coords[pos]
-    up = up / np.linalg.norm(up)
     north = np.array((0, 0, 1))
     north = ortho_proj(north, up)
-    north = north / np.linalg.norm(north)
+    north = north / norm(north)
     east = np.cross(up, north)
 
     basis = np.array((east, north, up))
@@ -425,7 +434,7 @@ class Player:
     for n in neighbors[pos]:
       delta = unique_coords[pos] - unique_coords[n]
       rectified_delta = -np.matmul(basis, delta)[0:2]
-      new_move = self.move_direction - self.prev_move/2
+      new_move = self.move_direction #- self.prev_move/2
       dot = np.dot(rectified_delta, new_move)
 
       if dot > max_dot:
@@ -485,13 +494,19 @@ class Player:
 
 
   def render_ghost_trail(self):
+    for n1 in neighbors[self.position]:
+      pixel_colors[n1] = BLANK_COLOR - 2
+      for n2 in neighbors[n1]:
+        pixel_colors[n2] = BLANK_COLOR -1
+
     if not self.has_shield:
       return
 
     for i in range(GHOST_BUFFER_LEN):
       delta_t = time() - self.ghost_timestamps[i]
-      color = self.color / 16 * exp(-16 * delta_t * delta_t)
-      color_pixel(self.ghost_positions[i], color)
+      magnitude = exp(-16 * delta_t * delta_t) / 8
+      color = self.color * magnitude
+      pixel_colors[self.ghost_positions[i]] = color + pixel_colors[self.ghost_positions[i]]
 
   def render_player(self):
     color = self.color
@@ -508,7 +523,14 @@ class Player:
       color = color * sin(time() * 20)
 
     if self.is_alive:
-      color_pixel(self.position, color)
+      # self_coords = unique_coords[self.position]
+      # for (i, coord) in enumerate(unique_coords):
+      #   distance = norm(self_coords - coord)
+      #   phase = max(1, distance*4)
+      #   pixel_colors[i] = pixel_colors[i] * phase
+
+
+      pixel_colors[self.position] = color
 
 
   def render_ready(self):
@@ -518,10 +540,10 @@ class Player:
       if bomb.position == self.position:
         color = color * (0.5 + 0.5*sin(pi * bomb_x / 1.5))
 
-    color_pixel(self.position, color)
+    pixel_colors[self.position] = color
     if self.is_ready:
       for n in neighbors[self.position]:
-        color_pixel(n, self.color / 32 * (1 + sin(time()*2)))      
+        pixel_colors[n] = self.color / 32 * (1 + sin(time()*2))
 
 
 
@@ -612,7 +634,7 @@ class Bomb:
     x += 2
     x = (200 / x) % 6
     color = multi_lerp(x, BOMB_COLOR_SEQUENCE)
-    color_pixel(self.position, color)
+    pixel_colors[self.position] = color
     return x
 
   def resolve(self):
@@ -621,10 +643,11 @@ class Bomb:
 
     # fuse has run out or a hit by an explosion
     if time() - self.timestamp >= BOMB_FUSE_TIME or statuses[self.position] != "blank":
+      explosions.append((time(), self.position))
       broadcast_event({
           "event": "explosion",
           "position": self.position})
-      
+
       statuses[self.position] = time() + BOMB_EXPLOSION_TIME - self.power/32
       for neighbor in neighbors[self.position]:
         explode((self.position, neighbor), self.power - 1)
@@ -649,7 +672,7 @@ def explode(direction, power):
 
 
 
-# ================================ WebSocket stuff =========================================
+# ================================ I/O =========================================
 
 def broadcast_event(event):
   print(json.dumps(event))
@@ -763,6 +786,8 @@ def consume_input():
 
 thread = Thread(target=consume_input)
 thread.start()
+
+
 
 start()
 

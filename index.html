@@ -180,22 +180,21 @@ startWebsocket();
 
 
 function playExplosion(event) {
-  console.log(event);
-  let audio = document.createElement('audio');
-  audio.src = "explosion.wav";
-  audio.clientWidth = 0;
-  audio.clientHeight = 0;
-  audio.addEventListener("ended",function() {
-    this.remove();
-  });
+  // let audio = document.createElement('audio');
+  // audio.src = "explosion.wav";
+  // audio.clientWidth = 0;
+  // audio.clientHeight = 0;
+  // audio.addEventListener("ended",function() {
+  //   this.remove();
+  // });
 
-  let selfCoordinates = pixelInfo.unique_coords[state.players[state.self].position];
-  let eventCoordinates = pixelInfo.unique_coords[event.position];
-  let d = math.norm(math.subtract(selfCoordinates, eventCoordinates));
-  audio.volume = math.min(1, 1.5 / (d * d));
+  // let selfCoordinates = pixelInfo.unique_coords[state.players[state.self].position];
+  // let eventCoordinates = pixelInfo.unique_coords[event.position];
+  // let d = math.norm(math.subtract(selfCoordinates, eventCoordinates));
+  // audio.volume = math.min(1, 1.5 / (d * d));
 
-  document.body.appendChild(audio);
-  audio.play();
+  // document.body.appendChild(audio);
+  // audio.play();
 }
 
 function render() {
@@ -293,7 +292,6 @@ function renderPosition(self) {
   ctx.fillStyle = "black";
 
   let up = pixelInfo.unique_coords[pos];
-  up = math.divide(up, math.norm(up));
   let north = [0, 0, 1];
   north_proj = math.multiply(up, math.dot(north, up));
   north = math.subtract(north, north_proj);
@@ -307,8 +305,8 @@ function renderPosition(self) {
     rectified_delta = [math.dot(east, delta), math.dot(north, delta)];
     
     ctx.beginPath();
-    ctx.arc(center[0] - 8 + rectified_delta[0] * 250,
-      center[1] - 8 + rectified_delta[1] * 250,
+    ctx.arc(center[0] - 8 + rectified_delta[0] * 1000,
+      center[1] - 8 + rectified_delta[1] * 1000,
       15, 0, 2 * Math.PI);
     ctx.fill();
   }
@@ -353,13 +351,16 @@ readyButton.onclick = event => {
 
 minimapRect = minimap.getBoundingClientRect();
 startLocation = null;
+previousLocation = null;
 timestamp = 0;
 // startTimeout = null;
 
 function handleStart(location) {
+  location = [location.clientX, location.clientY];
   startLocation = location;
-  center = [(location.clientX - minimapRect.x) / minimapRect.width * 1000,
-            (location.clientY - minimapRect.y) / minimapRect.height * 1000];
+  previousLocation = location;
+  center = [(location[0] - minimapRect.x) / minimapRect.width * 1000,
+            (location[1] - minimapRect.y) / minimapRect.height * 1000];
   timestamp = Date.now();
   // startTimeout = setTimeout(() => handleChange(location), 100);
 }
@@ -369,10 +370,10 @@ ontouchstart = event => {
 }
 
 function handleEnd(location) {
+  location = [location.clientX, location.clientY];
   // clearTimeout(startTimeout);
   if (Date.now() - timestamp < 100 &&
-      Math.abs(startLocation.clientX - location.clientX) < 2 &&
-      Math.abs(startLocation.clientY - location.clientY) < 2) {
+      math.norm(math.subtract(startLocation, location)) < 2) {
     send({type: "tap"});
   }
 
@@ -385,13 +386,23 @@ ontouchend = event => {
 }
 
 function handleChange(location) {
+  location = [location.clientX, location.clientY];
   // clearTimeout(startTimeout);
   if (startLocation == null) {
     return;
   }
-  move = [startLocation.clientX - location.clientX,
-          startLocation.clientY - location.clientY];
+  let startDelta = math.subtract(startLocation, location);
+  let delta = math.subtract(previousLocation, location);
+  previousLocation = location;
 
+  let mag = math.norm(delta);
+  let d = math.dot(delta, startDelta) / mag / math.norm(startDelta);
+  let alpha = Math.exp(-mag * (1 - d) / 100);
+  alpha = Math.max(0, alpha);
+  startLocation = math.add(math.multiply(startLocation, alpha),
+    math.multiply(location, 1 - alpha));
+
+  move = math.subtract(startLocation, location);
   send({type: "move", move});
 };
 onmousemove = handleChange;
